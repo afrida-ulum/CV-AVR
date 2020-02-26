@@ -1,0 +1,359 @@
+#include <mega32.h>
+#include <ff.h>
+#include <sdcard.h>
+#include <delay.h>
+#include <alcd.h>
+#include <stdlib.h>
+#include <stdio.h>
+#define valve_inlet PORTC.6
+#define valve_outlet PORTC.7
+// I2C Bus functions
+#asm
+.equ __i2c_port=0x15 ;PORTC
+.equ __sda_bit=0
+.equ __scl_bit=1
+#endasm
+#include <i2c.h>
+#include <ds1307.h>
+// Declare your global variables here
+//====================================================
+/* Timer1 overflow interrupt frequency [Hz] */
+#define T1_OVF_FREQ 100
+/* Timer1 clock prescaler value */
+#define T1_PRESC 1024L
+/* Timer1 initialization value after overflow */
+#define T1_INIT (0x10000L-
+(_MCU_CLOCK_FREQUENCY_/(T1_PRESC*T1_OVF_FREQ)))
+// ADC VREF VCC#define ADC_VREF_TYPE 0x40
+/* FAT function result */
+FRESULT res;
+/* number of bytes written/read to the file */
+unsigned int nbytes;
+/* will hold the information for logical drive 0: */
+FATFS fat;
+/* will hold the file information */
+FIL file;
+/* will hold file attributes, time stamp information */
+FILINFO finfo;
+char buffer[100];
+char filename[30];
+unsigned char hour[3];
+unsigned char minute[3];
+unsigned char second[3];
+unsigned char date[3];
+unsigned char month[3];
+unsigned char year[3];
+unsigned char status_tulis,status_create,h, m, s, d, mo,y;
+int CRH,x ;
+float crx, volume, hujan, crhj, hysteris=60;
+unsigned int panjangdatammc;
+unsigned char buf1[16],buf2[16];
+eeprom int flag;
+//==================================================
+unsigned int read_adc(unsigned char adc_input)
+{ADMUX=adc_input | (ADC_VREF_TYPE & 0xff);
+ADCSRA|=0x40;
+while ((ADCSRA & 0x10)==0);
+ADCSRA|=0x10;
+return ADCW;
+}
+interrupt [TIM1_OVF] void timer_comp_isr(void)
+{
+TCNT1H=T1_INIT>>8;
+TCNT1L=T1_INIT&0xFF;
+disk_timerproc();
+}
+void timer_mmc()
+{
+//TIMER
+TCCR1A=0x00;
+TCCR1B=(1<<CS12)|(1<<CS10);
+TCNT1H=T1_INIT>>8;
+TCNT1L=T1_INIT&0xFF;
+TIMSK=1<<TOIE1;
+}
+void stop_timer_mmc()
+{
+//TIMER
+TCCR1A=0x00;
+TCCR1B=0;
+TCNT1H=T1_INIT>>8;
+TCNT1L=T1_INIT&0xFF;TIMSK&=~(1<<TOIE1);
+}
+void error(FRESULT res)
+{
+if ((res>=FR_DISK_ERR) && (res<=FR_TIMEOUT))
+{
+//poutput=USART1;
+//printf("ERROR: %p\r\n",error_msg[res]);
+}
+}
+void display_status(char *file_name)
+{
+if ((res=f_stat(file_name,&finfo))==FR_OK)
+{
+}
+}
+//================================================
+void inisialisasi_fat(void)
+{
+timer_mmc();
+for(;;)
+{
+if ((res=f_mount(0,&fat))==FR_OK)
+{
+break;
+}
+else
+{error(res);
+}
+}
+stop_timer_mmc();
+}
+void reset_filename(void)
+{
+unsigned char i_reset; for(i_reset=0;i_reset<30;i_reset++)
+{
+filename[i_reset]=0;
+}
+}
+//=========================================================
+===
+void file_data_ukur(void)
+{
+filename[0]='0';
+filename[1]=':';
+filename[2]='D';
+filename[3]='a';
+filename[4]='t';
+filename[5]='a';
+filename[6]='.';
+filename[7]='t';
+filename[8]='x';
+filename[9]='t';
+}
+void file_baru(void)
+{unsigned char ulang;
+status_create=0;
+for(ulang=0;ulang<10;ulang++)
+{
+reset_filename();
+file_data_ukur();
+timer_mmc();
+if ((res=f_open(&file,filename,FA_CREATE_NEW))==FR_OK)status_create=1;
+else status_create=0;
+if(status_create==1)
+{
+if ((res=f_close(&file))==FR_OK)status_create=1;
+else status_create=0;
+}
+if(status_create==1)break;
+}
+stop_timer_mmc();
+}
+void isi_file(void)
+{
+unsigned ulang;
+status_tulis=0;
+reset_filename();
+file_data_ukur();
+display_status(filename);
+for(ulang=0;ulang<10;ulang++)
+{
+timer_mmc();if ((res=f_open(&file,filename,FA_WRITE))==FR_OK)status_tulis=1;
+else status_tulis=0;
+if(status_tulis==1)
+{
+if ((res=f_lseek(&file,finfo.fsize))==FR_OK)status_tulis=1;
+else status_tulis=0;
+}
+if(status_tulis==1)
+{
+if
+((res=f_write(&file,buffer,panjangdatammc+1,&nbytes))==FR_OK)status_tulis=1
+;
+else status_tulis=0;
+}
+if(status_tulis==1)
+{
+if ((res=f_close(&file))==FR_OK)status_tulis=1;
+else status_tulis=0;
+}
+if(status_tulis==1)break;
+delay_ms(500);
+}
+stop_timer_mmc();
+}
+
+void data()
+{
+panjangdatammc=0;buffer[panjangdatammc]=' ';
+panjangdatammc++;
+buffer[panjangdatammc]=hour[0];
+panjangdatammc++;
+buffer[panjangdatammc]=hour[1];
+panjangdatammc++;
+buffer[panjangdatammc]=':';
+panjangdatammc++;
+buffer[panjangdatammc]=minute[0];
+panjangdatammc++;
+buffer[panjangdatammc]=minute[1];
+panjangdatammc++;
+buffer[panjangdatammc]=':';
+panjangdatammc++;
+buffer[panjangdatammc]=second[0];
+panjangdatammc++;
+buffer[panjangdatammc]=second[1];
+panjangdatammc++;
+buffer[panjangdatammc]=' ';
+panjangdatammc++;
+buffer[panjangdatammc]=' ';
+panjangdatammc++;
+buffer[panjangdatammc]=' ';
+panjangdatammc++;
+buffer[panjangdatammc]=' ';
+buffer[panjangdatammc]=date[0];
+panjangdatammc++;
+buffer[panjangdatammc]=date[1];panjangdatammc++;
+buffer[panjangdatammc]='/';
+panjangdatammc++;
+buffer[panjangdatammc]=month[0];
+panjangdatammc++;
+buffer[panjangdatammc]=month[1];
+panjangdatammc++;
+buffer[panjangdatammc]='/';
+panjangdatammc++;
+buffer[panjangdatammc]=year[0];
+panjangdatammc++;
+buffer[panjangdatammc]=year[1];
+panjangdatammc++;
+buffer[panjangdatammc]=' ';
+panjangdatammc++;
+buffer[panjangdatammc]=' ';
+panjangdatammc++;
+buffer[panjangdatammc]=' ';
+panjangdatammc++;
+buffer[panjangdatammc]=' ';
+panjangdatammc++;
+buffer[panjangdatammc]=' ';
+panjangdatammc++;
+buffer[panjangdatammc]=' ';
+panjangdatammc++;
+buffer[panjangdatammc]=' ';
+panjangdatammc++;
+buffer[panjangdatammc]=' ';buffer[panjangdatammc]=buf2[0];
+panjangdatammc++;
+buffer[panjangdatammc]=buf2[1];
+panjangdatammc++;
+buffer[panjangdatammc]=buf2[2];
+panjangdatammc++;
+buffer[panjangdatammc]=buf2[3];
+panjangdatammc++;
+buffer[panjangdatammc]=buf2[4];
+panjangdatammc++;
+buffer[panjangdatammc]=' ';
+panjangdatammc++;
+buffer[panjangdatammc]=' ';
+panjangdatammc++;
+buffer[panjangdatammc]=13;
+panjangdatammc++;
+buffer[panjangdatammc]=10;
+}
+void main(void)
+{
+PORTA=0x00;
+DDRA=0x00;
+PORTB=0x00;
+DDRB=0x00;
+PORTC=0x00;
+DDRC=0b11000000;
+PORTD=0x00;
+DDRD=0x00;TCCR1A=0x00;
+TCCR1B=(1<<CS12)|(1<<CS10);
+TCNT1H=T1_INIT>>8;
+TCNT1L=T1_INIT&0xFF;
+TIMSK=1<<TOIE1;
+ADMUX=ADC_VREF_TYPE & 0xff;
+ADCSRA=0x84;
+SFIOR&=0xEF;
+#asm("sei")
+ADMUX=ADC_VREF_TYPE & 0xff;
+ADCSRA=0x84;
+SFIOR&=0xEF;
+lcd_init(16);
+WDTCR=0x0F;
+
+i2c_init();
+rtc_init(0,0,0);
+lcd_init(16);
+lcd_gotoxy(0,0);
+lcd_putsf("INISIALISASI....");
+delay_ms(2000);
+inisialisasi_fat();
+delay_ms(2);
+file_baru();
+delay_ms(2);
+
+while (1)
+{#asm("wdr");
+x++;
+
+CRH=read_adc(0);
+crx = (float) CRH * 5 / 1023;
+volume= (350 * crx) - 280 ;
+hujan = volume*1000;
+crhj = hujan/17662.5;
+lcd_gotoxy(0,0);
+
+lcd_putsf("Crhj= mm");
+ftoa(crhj,2,buf2);
+lcd_gotoxy(6,0);
+lcd_puts(buf2);
+lcd_gotoxy(0,1);
+lcd_putsf("Vol = ml");
+ftoa(volume,1,buf1);
+lcd_gotoxy(6,1);
+lcd_puts(buf1);
+if(volume>=310)
+{
+
+valve_inlet=1; 
+valve_outlet=1; 
+flag=1;
+delay_ms(300);
+}
+else if (volume > hysteris && flag ==1){
+valve_inlet=1; 
+valve_outlet=1; 
+delay_ms(300);
+}
+else if (volume < hysteris && flag ==1
+)
+{
+valve_inlet=0; 
+valve_outlet=0; 
+flag=0;
+}
+else if (volume < 310 && flag ==0)
+{
+valve_inlet=0; 
+valve_outlet=0;
+}
+rtc_get_time(&h,&m,&s); 
+mengakses tanggal
+sprintf(hour,"%d",h);
+sprintf(minute,"%d",m);
+sprintf(second,"%d",s);
+sprintf(date,"%d",d);
+sprintf(month,"%d",mo);
+sprintf(year,"%d",y);
+if(x>=20 && flag == 0) 
+{
+x=0;data();
+delay_ms(2);
+isi_file();
+delay_ms(2);
+}
+delay_ms(300);
+};
+}
